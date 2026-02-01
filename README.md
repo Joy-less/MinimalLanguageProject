@@ -67,7 +67,7 @@ cat = {
     };
 
     call = () {
-        return(this.copy());
+        return(this().copy());
     };
 };
 
@@ -82,7 +82,7 @@ cat = {
     name = "";
 
     create = (name) {
-        this.name = name;
+        this().name = name;
     };
 
     call = () {
@@ -203,4 +203,4 @@ get_numbers = () {
 
 There are no reserved keywords, but these are "special" words:
 - `call` - name of sub-object called when object called
-- `components` - name of list to search for identifiers (first checks `scope()`, then `this`, then each of `components` in breadth-first search)
+- `components` - name of list to search for identifiers (first checks `scope()`, then `this()`, then each of `components` in breadth-first search)
