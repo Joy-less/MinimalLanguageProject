@@ -2,8 +2,8 @@
 
 ## Example Code
 
-```
-// FizzBuzz
+```rb
+# FizzBuzz #
 fizzbuzz = (n) {
     for (range(1, 10), (i) {
         if (i.mod(3).equals(0) .and (i.mod(5).equals(0)), () {
@@ -20,15 +20,19 @@ fizzbuzz = (n) {
         });
     });
 };
+```
 
-// Double Numbers
+```rb
+# Double Numbers #
 numbers = list(1, 2, 3, 4, 5);
 for (numbers, (i, number) {
     numbers.set(i, number.mul(2));
 });
-log(numbers); // [2, 4, 6, 8, 10]
+log(numbers); # [2, 4, 6, 8, 10] #
+```
 
-// Break Loop
+```rb
+# Break Loop #
 break = () {}
 try (() {
     for (range(1, 10), (i) {
@@ -40,4 +44,12 @@ try (() {
     });
 })
 .catch(break, () { });
+```
+
+```rb
+# Macros #
+a = b.and(c)
+
+$macro("&&", (".and(", ")"));
+a = b && c
 ```
