@@ -1,5 +1,4 @@
-﻿using System.Buffers.Binary;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace HoloLang;
@@ -59,7 +58,7 @@ public readonly struct Result<T, E> {
         }
     }
 
-    public static Result<Success, E> Success() {
+    public static Result<Success, E> FromSuccess() {
         return new Result<Success, E>(false, default, default);
     }
     public static Result<T, E> FromValue(T Value) {
@@ -93,7 +92,6 @@ public readonly struct Result<T, E> {
 public sealed class Parser {
     public string Source { get; }
     public int Index { get; private set; }
-    public List<Expression> Expressions { get; private set; }
 
     private static readonly char[] NewlineChars = ['\n', '\r'];
     private static readonly char[] WhitespaceChars = [' ', '\t', '\v', '\f', ..NewlineChars];
@@ -101,81 +99,166 @@ public sealed class Parser {
     private Parser(string Source) {
         this.Source = Source;
         Index = 0;
-        Expressions = [];
     }
 
-    public static List<Expression> Parse(string Source) {
+    public static Result<List<Expression>, string> Parse(string Source) {
         Parser Parser = new(Source);
 
-        Parser.ConsumeExpressions();
+        Result<List<Expression>, string> ExpressionsResult = Parser.ParseExpressions();
+        if (ExpressionsResult.IsError) {
+            return Result<List<Expression>, string>.FromError(ExpressionsResult.Error);
+        }
 
-        return Parser.Expressions;
+        Result<Success, string> EndOfInputResult = Parser.ParseEndOfInput();
+        if (EndOfInputResult.IsError) {
+            return Result<List<Expression>, string>.FromError(EndOfInputResult.Error);
+        }
+
+        return Result<List<Expression>, string>.FromValue(ExpressionsResult.Value);
     }
 
-    private Result<Success, string> ConsumeExpressions() {
+    private Result<Success, string> ParseEndOfInput() {
+        // Whitespace
+        ReadWhitespace();
+
+        // Invalid
+        if (Index < Source.Length) {
+            return Result<Success, string>.FromError($"Expected `;`, got `{Source[Index]}`");
+        }
+        return Result<Success, string>.FromSuccess();
+    }
+    private Result<List<Expression>, string> ParseExpressions() {
+        List<Expression> Expressions = [];
+
         for (; Index < Source.Length; Index++) {
-            ConsumeWhitespace();
+            // Whitespace
+            ReadWhitespace();
 
+            // End of input
+            if (Index >= Source.Length) {
+                break;
+            }
+
+            // String
             if (Source[Index] is '"' or '\'') {
-                Result<string, string> StringResult = ConsumeString();
+                // Consume string
+                int StringStartIndex = Index;
+                Result<Success, string> StringResult = ReadString();
                 if (StringResult.IsError) {
-                    return Result<Success, string>.FromError(StringResult.ErrorOrDefault);
+                    return Result<List<Expression>, string>.FromError(StringResult.Error);
                 }
-                Variant Variant = Variant.FromString(StringResult.Value);
+                ReadOnlySpan<char> String = Source.AsSpan(StringStartIndex..Index);
+
+                // Create literal string expression
+                Variant Variant = Variant.FromString(new string(String));
                 Expressions.Add(new VariantExpression(Variant));
             }
+            // Number
             else if (Source[Index] is (>= '0' and <= '9') or '-' or '+') {
-                Result<string, string> NumberResult = ConsumeNumber();
+                // Consume number
+                int NumberStartIndex = Index;
+                Result<Success, string> NumberResult = ReadNumber();
                 if (NumberResult.IsError) {
-                    return Result<Success, string>.FromError(NumberResult.ErrorOrDefault);
+                    return Result<List<Expression>, string>.FromError(NumberResult.Error);
                 }
-                Variant Variant = NumberResult.Value.Contains('.')
-                    ? Variant.FromReal(double.Parse(NumberResult.Value))
-                    : Variant.FromInteger(long.Parse(NumberResult.Value));
+                ReadOnlySpan<char> Number = Source.AsSpan(NumberStartIndex..Index);
+
+                // Create literal number expression
+                Variant Variant = Number.Contains('.')
+                    ? Variant.FromReal(double.Parse(Number))
+                    : Variant.FromInteger(long.Parse(Number));
                 Expressions.Add(new VariantExpression(Variant));
             }
-
-            ConsumeWhitespace();
-
-            if (Index < Source.Length) {
-                if (Source[Index] is not ';') {
-                    return Result<Success, string>.FromError("Expected semicolon before next expression");
+            // Identifier
+            else if (Source[Index] is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or '_') {
+                // Consume identifier
+                int IdentifierStartIndex = Index;
+                Result<Success, string> IdentifierResult = ReadIdentifier();
+                if (IdentifierResult.IsError) {
+                    return Result<List<Expression>, string>.FromError(IdentifierResult.Error);
                 }
+                ReadOnlySpan<char> Identifier = Source.AsSpan(IdentifierStartIndex..Index);
+
+                // Create get expression
+                Expressions.Add(new GetExpression(null, new string(Identifier)));
+            }
+            // Variant
+            else if (Source[Index] is '{') {
+                // Consume variant
+                Result<Variant, string> VariantResult = ParseVariant();
+                if (VariantResult.IsError) {
+                    return Result<List<Expression>, string>.FromError(VariantResult.Error);
+                }
+
+                // Create variant expression
+                Expressions.Add(new VariantExpression(VariantResult.Value));
+            }
+
+            // Whitespace
+            ReadWhitespace();
+
+            // End of input
+            if (Index >= Source.Length) {
+                break;
+            }
+
+            // Semicolon
+            if (Source[Index] is not ';') {
+                break;
             }
         }
-        return Result<Success, string>.Success();
+
+        return Result<List<Expression>, string>.FromValue(Expressions);
     }
-    private void ConsumeWhitespace() {
+    private Result<Variant, string> ParseVariant() {
+        if (Source[Index] is not '{') {
+            return Result<Variant, string>.FromError("Expected `{` to start variant");
+        }
+        Index++;
+
+        Result<List<Expression>, string> ExpressionsResult = ParseExpressions();
+        if (ExpressionsResult.IsError) {
+            return Result<Variant, string>.FromError(ExpressionsResult.Error);
+        }
+
+        if (Source[Index] is not '}') {
+            return Result<Variant, string>.FromError("Expected `}` to end variant");
+        }
+        Index++;
+
+        Variant Variant = Variant.From(Variant.FromList(), ExpressionsResult.Value, null);
+        return Result<Variant, string>.FromValue(Variant);
+    }
+    private void ReadWhitespace() {
         for (; Index < Source.Length; Index++) {
             if (!WhitespaceChars.Contains(Source[Index])) {
                 return;
             }
         }
     }
-    private Result<string, string> ConsumeString() {
-        int StartIndex = Index;
+    private Result<Success, string> ReadString() {
         if (Index >= Source.Length || Source[Index] is not ('"' or '\'')) {
-            return Result<string, string>.FromError("Expected string, got nothing");
+            return Result<Success, string>.FromError("Expected string, got nothing");
         }
+        char StartChar = Source[Index];
         Index++;
 
         for (; Index < Source.Length; Index++) {
-            if (Source[Index] == Source[StartIndex]) {
+            if (Source[Index] == StartChar) {
                 Index++;
-                return Result<string, string>.FromValue(Source[StartIndex..Index]);
+                return Result<Success, string>.FromSuccess();
             }
         }
 
-        return Result<string, string>.FromError("Expected end of string, got end of input");
+        return Result<Success, string>.FromError("Expected end of string, got end of input");
     }
-    private Result<string, string> ConsumeNumber() {
-        int StartIndex = Index;
+    private Result<Success, string> ReadNumber() {
         if (Index <= Source.Length && Source[Index] is '-' or '+') {
             Index++;
         }
 
         if (Source[Index] is not (>= '0' and <= '9')) {
-            return Result<string, string>.FromError("Expected digit to start number");
+            return Result<Success, string>.FromError("Expected digit to start number");
         }
         Index++;
 
@@ -185,13 +268,13 @@ public sealed class Parser {
             }
             if (Source[Index] is '.') {
                 if (Source[Index - 1] is not (>= '0' and <= '9')) {
-                    return Result<string, string>.FromError("Expected digit before dot in number");
+                    return Result<Success, string>.FromError("Expected digit before `.` in number");
                 }
                 continue;
             }
             if (Source[Index] is '_') {
                 if (Source[Index - 1] is not (>= '0' and <= '9')) {
-                    return Result<string, string>.FromError("Expected digit before underscore in number");
+                    return Result<Success, string>.FromError("Expected digit before `_` in number");
                 }
                 continue;
             }
@@ -199,10 +282,25 @@ public sealed class Parser {
         }
 
         if (Source[Index - 1] is '_') {
-            return Result<string, string>.FromError("Trailing underscore in number");
+            return Result<Success, string>.FromError("Trailing `_` in number");
         }
 
-        return Result<string, string>.FromValue(Source[StartIndex..Index]);
+        return Result<Success, string>.FromSuccess();
+    }
+    private Result<Success, string> ReadIdentifier() {
+        if (Source[Index] is not ((>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or '_')) {
+            return Result<Success, string>.FromError("Expected letter or `_` to start identifier");
+        }
+        Index++;
+
+        for (; Index < Source.Length; Index++) {
+            if (Source[Index] is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or (>= '0' and <= '9') or '_') {
+                continue;
+            }
+            return Result<Success, string>.FromSuccess();
+        }
+
+        return Result<Success, string>.FromSuccess();
     }
 }
 
@@ -210,9 +308,9 @@ public abstract class Expression {
 }
 public class GetExpression : Expression {
     public Expression? Chain { get; }
-    public Expression Member { get; set; }
+    public string Member { get; set; }
 
-    public GetExpression(Expression? Chain, Expression Member) {
+    public GetExpression(Expression? Chain, string Member) {
         this.Chain = Chain;
         this.Member = Member;
     }
@@ -228,14 +326,21 @@ public class VariantExpression : Expression {
         this.Variant = Variant;
     }
 }
+public class ExternalCallExpression : Expression {
+    public Func<Variant[], Variant> ExternalFunction { get; }
+
+    public ExternalCallExpression(Func<Variant[], Variant> ExternalFunction) {
+        this.ExternalFunction = ExternalFunction;
+    }
+}
 
 public sealed class Variant {
     public const string ComponentsVariable = "components";
     public const string CallVariable = "call";
 
-    private readonly Dictionary<string, Variant> Variables;
-    //private readonly List<Expression> Code;
-    private readonly object? Data;
+    public Dictionary<string, Variant> Variables { get; }
+    public List<Expression> Expressions { get; }
+    public object? Data { get; }
 
     public static Variant Null { get; } = new();
     public static Variant Boolean { get; } = new();
@@ -245,42 +350,40 @@ public sealed class Variant {
     public static Variant List { get; } = new();
     public static Variant Dictionary { get; } = new();
 
-    public Variant() {
+    private Variant() {
         Variables = [];
+        Expressions = [];
         Data = null;
     }
-
-    private Variant(Dictionary<string, Variant> Variables, object? Data) {
+    private Variant(Dictionary<string, Variant> Variables, List<Expression> Expressions, object? Data) {
         this.Variables = Variables;
+        this.Expressions = Expressions;
         this.Data = Data;
     }
 
-    public static Variant From(Variant Components, object? Data) {
-        return new Variant(new Dictionary<string, Variant>() { [ComponentsVariable] = Components }, Data);
-    }
-    public static Variant From(IEnumerable<Variant> Components, object? Data) {
-        return From(FromList(Components), Data);
+    public static Variant From(Variant Components, List<Expression> Expressions, object? Data) {
+        return new Variant(new Dictionary<string, Variant>() { [ComponentsVariable] = Components }, Expressions, Data);
     }
     public static Variant FromBoolean(bool BooleanData) {
-        return From([Boolean], BooleanData);
+        return From(FromList(Boolean), [], BooleanData);
     }
     public static Variant FromInteger(long IntegerData) {
-        return From([Integer], IntegerData);
+        return From(FromList(Integer), [], IntegerData);
     }
     public static Variant FromReal(double RealData) {
-        return From([Real], RealData);
+        return From(FromList(Real), [], RealData);
     }
     public static Variant FromString(byte[] StringData) {
-        return From([String], StringData);
+        return From(FromList(String), [], StringData);
     }
     public static Variant FromString(string StringData) {
         return FromString(Encoding.UTF8.GetBytes(StringData));
     }
-    public static Variant FromList(IEnumerable<Variant> ListData) {
-        return From(List, ListData);
+    public static Variant FromList(params IEnumerable<Variant> ListData) {
+        return From(List, [], ListData);
     }
     public static Variant FromDictionary(IReadOnlyDictionary<Variant, Variant> DictionaryData) {
-        return From([Dictionary], DictionaryData);
+        return From(FromList(Dictionary), [], DictionaryData);
     }
 
     public Variant GetVariable(string Name) {
