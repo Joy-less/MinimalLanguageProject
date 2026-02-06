@@ -150,8 +150,8 @@ public sealed class Parser {
                 ReadOnlySpan<char> String = Source.AsSpan(StringStartIndex..Index);
 
                 // Create literal string expression
-                Variant Variant = Variant.FromString(new string(String));
-                Expressions.Add(new VariantExpression(Variant));
+                Box Box = Box.FromString(new string(String));
+                Expressions.Add(new BoxExpression(Box));
             }
             // Number
             else if (Source[Index] is (>= '0' and <= '9') or '-' or '+') {
@@ -164,10 +164,10 @@ public sealed class Parser {
                 ReadOnlySpan<char> Number = Source.AsSpan(NumberStartIndex..Index);
 
                 // Create literal number expression
-                Variant Variant = Number.Contains('.')
-                    ? Variant.FromReal(double.Parse(Number))
-                    : Variant.FromInteger(long.Parse(Number));
-                Expressions.Add(new VariantExpression(Variant));
+                Box Box = Number.Contains('.')
+                    ? Box.FromReal(double.Parse(Number))
+                    : Box.FromInteger(long.Parse(Number));
+                Expressions.Add(new BoxExpression(Box));
             }
             // Identifier
             else if (Source[Index] is (>= 'a' and <= 'z') or (>= 'A' and <= 'Z') or '_') {
@@ -182,16 +182,16 @@ public sealed class Parser {
                 // Create get expression
                 Expressions.Add(new GetExpression(null, new string(Identifier)));
             }
-            // Variant
+            // Box
             else if (Source[Index] is '{') {
-                // Consume variant
-                Result<Variant, string> VariantResult = ParseVariant();
-                if (VariantResult.IsError) {
-                    return Result<List<Expression>, string>.FromError(VariantResult.Error);
+                // Consume box
+                Result<Box, string> BoxResult = ParseBox();
+                if (BoxResult.IsError) {
+                    return Result<List<Expression>, string>.FromError(BoxResult.Error);
                 }
 
-                // Create variant expression
-                Expressions.Add(new VariantExpression(VariantResult.Value));
+                // Create box expression
+                Expressions.Add(new BoxExpression(BoxResult.Value));
             }
 
             // Whitespace
@@ -210,24 +210,24 @@ public sealed class Parser {
 
         return Result<List<Expression>, string>.FromValue(Expressions);
     }
-    private Result<Variant, string> ParseVariant() {
+    private Result<Box, string> ParseBox() {
         if (Source[Index] is not '{') {
-            return Result<Variant, string>.FromError("Expected `{` to start variant");
+            return Result<Box, string>.FromError("Expected `{` to start box");
         }
         Index++;
 
         Result<List<Expression>, string> ExpressionsResult = ParseExpressions();
         if (ExpressionsResult.IsError) {
-            return Result<Variant, string>.FromError(ExpressionsResult.Error);
+            return Result<Box, string>.FromError(ExpressionsResult.Error);
         }
 
         if (Source[Index] is not '}') {
-            return Result<Variant, string>.FromError("Expected `}` to end variant");
+            return Result<Box, string>.FromError("Expected `}` to end box");
         }
         Index++;
 
-        Variant Variant = Variant.From(Variant.FromList(), ExpressionsResult.Value, null);
-        return Result<Variant, string>.FromValue(Variant);
+        Box Box = Box.From(Box.FromList(), ExpressionsResult.Value, null);
+        return Result<Box, string>.FromValue(Box);
     }
     private void ReadWhitespace() {
         for (; Index < Source.Length; Index++) {
@@ -319,80 +319,80 @@ public class CallExpression : Expression {
 }
 public class AssignExpression : Expression {
 }
-public class VariantExpression : Expression {
-    public Variant Variant { get; }
+public class BoxExpression : Expression {
+    public Box Box { get; }
 
-    public VariantExpression(Variant Variant) {
-        this.Variant = Variant;
+    public BoxExpression(Box Box) {
+        this.Box = Box;
     }
 }
 public class ExternalCallExpression : Expression {
-    public Func<Variant[], Variant> ExternalFunction { get; }
+    public Func<Box[], Box> ExternalFunction { get; }
 
-    public ExternalCallExpression(Func<Variant[], Variant> ExternalFunction) {
+    public ExternalCallExpression(Func<Box[], Box> ExternalFunction) {
         this.ExternalFunction = ExternalFunction;
     }
 }
 
-public sealed class Variant {
+public sealed class Box {
     public const string ComponentsVariable = "components";
     public const string CallVariable = "call";
 
-    public Dictionary<string, Variant> Variables { get; }
+    public Dictionary<string, Box> Variables { get; }
     public List<Expression> Expressions { get; }
     public object? Data { get; }
 
-    public static Variant Null { get; } = new();
-    public static Variant Boolean { get; } = new();
-    public static Variant Integer { get; } = new();
-    public static Variant Real { get; } = new();
-    public static Variant String { get; } = new();
-    public static Variant List { get; } = new();
-    public static Variant Dictionary { get; } = new();
+    public static Box Null { get; } = new();
+    public static Box Boolean { get; } = new();
+    public static Box Integer { get; } = new();
+    public static Box Real { get; } = new();
+    public static Box String { get; } = new();
+    public static Box List { get; } = new();
+    public static Box Dictionary { get; } = new();
 
-    private Variant() {
+    private Box() {
         Variables = [];
         Expressions = [];
         Data = null;
     }
-    private Variant(Dictionary<string, Variant> Variables, List<Expression> Expressions, object? Data) {
+    private Box(Dictionary<string, Box> Variables, List<Expression> Expressions, object? Data) {
         this.Variables = Variables;
         this.Expressions = Expressions;
         this.Data = Data;
     }
 
-    public static Variant From(Variant Components, List<Expression> Expressions, object? Data) {
-        return new Variant(new Dictionary<string, Variant>() { [ComponentsVariable] = Components }, Expressions, Data);
+    public static Box From(Box Components, List<Expression> Expressions, object? Data) {
+        return new Box(new Dictionary<string, Box>() { [ComponentsVariable] = Components }, Expressions, Data);
     }
-    public static Variant FromBoolean(bool BooleanData) {
+    public static Box FromBoolean(bool BooleanData) {
         return From(FromList(Boolean), [], BooleanData);
     }
-    public static Variant FromInteger(long IntegerData) {
+    public static Box FromInteger(long IntegerData) {
         return From(FromList(Integer), [], IntegerData);
     }
-    public static Variant FromReal(double RealData) {
+    public static Box FromReal(double RealData) {
         return From(FromList(Real), [], RealData);
     }
-    public static Variant FromString(byte[] StringData) {
+    public static Box FromString(byte[] StringData) {
         return From(FromList(String), [], StringData);
     }
-    public static Variant FromString(string StringData) {
+    public static Box FromString(string StringData) {
         return FromString(Encoding.UTF8.GetBytes(StringData));
     }
-    public static Variant FromList(params IEnumerable<Variant> ListData) {
+    public static Box FromList(params IEnumerable<Box> ListData) {
         return From(List, [], ListData);
     }
-    public static Variant FromDictionary(IReadOnlyDictionary<Variant, Variant> DictionaryData) {
+    public static Box FromDictionary(IReadOnlyDictionary<Box, Box> DictionaryData) {
         return From(FromList(Dictionary), [], DictionaryData);
     }
 
-    public Variant GetVariable(string Name) {
-        if (Variables.TryGetValue(Name, out Variant? Value)) {
+    public Box GetVariable(string Name) {
+        if (Variables.TryGetValue(Name, out Box? Value)) {
             return Value;
         }
         return Null;
     }
-    public void SetVariable(string Name, Variant? Value) {
+    public void SetVariable(string Name, Box? Value) {
         if (Value is null || Value == Null) {
             Variables.Remove(Name);
         }
@@ -400,10 +400,10 @@ public sealed class Variant {
             Variables[Name] = Value;
         }
     }
-    public IEnumerable<Variant>? GetComponents() {
-        return GetVariable(ComponentsVariable).Data as IEnumerable<Variant>;
+    public IEnumerable<Box>? GetComponents() {
+        return GetVariable(ComponentsVariable).Data as IEnumerable<Box>;
     }
-    public void SetComponents(IEnumerable<Variant> Components) {
+    public void SetComponents(IEnumerable<Box> Components) {
         SetVariable(ComponentsVariable, FromList(Components));
     }
 }
