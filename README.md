@@ -202,8 +202,8 @@ get_numbers = () {
 ```rb
 # Tuples #
 
-numbers = (1, 2, 3);
-log(numbers.mul(2)); # (2, 4, 6)
+(num1, num2, num3) = (1, 2, 3);
+log((num1, num2, num3).mul(2)); # (2, 4, 6)
 ```
 
 ```rb
