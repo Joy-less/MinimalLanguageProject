@@ -16,7 +16,7 @@ _ = Expression;
 // Evaluate
 
 Actor Actor = new();
-Box Target = new();
+Box Target = Actor.CreateBox();
 
 Result<Box, string> Result = Actor.Evaluate(Target, Expression);
 _ = Result;

@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Text;
 
 namespace HoloLang;
@@ -407,52 +406,22 @@ public sealed class Box {
     public const string CallVariableName = "call";
     public const string GetVariableName = "get";
 
+    public Actor Actor { get; }
     public Dictionary<string, Box> Variables { get; }
     public BoxMethod Method { get; }
     public object? Data { get; }
 
-    public static Box Null { get; } = new();
-    public static Box Boolean { get; } = new();
-    public static Box Integer { get; } = new();
-    public static Box Real { get; } = new();
-    public static Box String { get; } = new();
-    public static Box List { get; } = new();
-    public static Box Dictionary { get; } = new();
-
-    public Box() {
-        Variables = [];
-        Method = new BoxMethod();
-        Data = null;
-    }
-    private Box(Dictionary<string, Box> Variables, BoxMethod Method, object? Data) {
+    internal Box(Actor Actor, Dictionary<string, Box> Variables, BoxMethod Method, object? Data) {
+        this.Actor = Actor;
         this.Variables = Variables;
         this.Method = Method;
         this.Data = Data;
     }
-
-    public static Box From(Box Components, BoxMethod Method, object? Data) {
-        return new Box(new Dictionary<string, Box>() { [ComponentsVariableName] = Components }, Method, Data);
+    internal Box(Actor Actor)
+        : this(Actor, [], default, null) {
     }
-    public static Box FromBoolean(bool BooleanData) {
-        return From(FromList(Boolean), new BoxMethod(), BooleanData);
-    }
-    public static Box FromInteger(long IntegerData) {
-        return From(FromList(Integer), new BoxMethod(), IntegerData);
-    }
-    public static Box FromReal(double RealData) {
-        return From(FromList(Real), new BoxMethod(), RealData);
-    }
-    public static Box FromString(byte[] StringData) {
-        return From(FromList(String), new BoxMethod(), StringData);
-    }
-    public static Box FromString(string StringData) {
-        return FromString(Encoding.UTF8.GetBytes(StringData));
-    }
-    public static Box FromList(params IEnumerable<Box> ListData) {
-        return From(List, new BoxMethod(), ListData);
-    }
-    public static Box FromDictionary(IReadOnlyDictionary<Box, Box> DictionaryData) {
-        return From(FromList(Dictionary), new BoxMethod(), DictionaryData);
+    internal Box(Actor Actor, Box Components, BoxMethod Method, object? Data)
+        : this(Actor, new Dictionary<string, Box>() { [ComponentsVariableName] = Components }, Method, Data) {
     }
 
     public Box? GetVariable(string Name) {
@@ -473,22 +442,47 @@ public sealed class Box {
         return GetVariable(ComponentsVariableName)?.Data as IEnumerable<Box>;
     }
     public void SetComponents(IEnumerable<Box> Components) {
-        SetVariable(ComponentsVariableName, FromList(Components));
+        SetVariable(ComponentsVariableName, Actor.CreateList(Components));
     }
     public BoxMethod GetMethod() {
         Box CurrentBox = this;
         while (true) {
-            Box NewBox = CurrentBox.GetVariable(CallVariableName) ?? Null;
-            if (NewBox == Null) {
+            Box NewBox = CurrentBox.GetVariable(CallVariableName) ?? Actor.NullInstance;
+            if (NewBox.IsNull()) {
                 return CurrentBox.Method;
             }
             CurrentBox = NewBox;
         }
     }
+    public bool Includes(Box Box) {
+        if (this == Box) {
+            return true;
+        }
+
+        Queue<Box> Queue = new();
+        Queue.Enqueue(Box);
+        while (Queue.TryDequeue(out Box? Current)) {
+            if (Current == Box) {
+                return true;
+            }
+
+            IEnumerable<Box>? CurrentComponents = Box.GetComponents();
+            if (CurrentComponents is not null) {
+                foreach (Box Component in CurrentComponents) {
+                    Queue.Enqueue(Component);
+                }
+            }
+        }
+
+        return false;
+    }
+    public bool IsNull() {
+        return Includes(Actor.Null);
+    }
 }
 
 public struct BoxMethod {
-    public List<string> Parameters { get; set; }
+    public List<string>? Parameters { get; set; }
     public Expression? Expression { get; set; }
 
     public BoxMethod(List<string> Parameters, Expression? Expression) {
@@ -500,9 +494,69 @@ public struct BoxMethod {
 public sealed class Actor {
     private readonly Lock Lock = new();
 
+    public Box Null { get; }
+    public Box Boolean { get; }
+    public Box Integer { get; }
+    public Box Real { get; }
+    public Box String { get; }
+    public Box List { get; }
+    public Box Dictionary { get; }
+
+    public Box NullInstance { get; }
+    public Box TrueInstance { get; }
+    public Box FalseInstance { get; }
+
+    public Actor() {
+        Null = CreateBox();
+        Boolean = CreateBox();
+        Integer = CreateBox();
+        Real = CreateBox();
+        String = CreateBox();
+        List = CreateBox();
+        Dictionary = CreateBox();
+        NullInstance = CreateNull();
+        TrueInstance = CreateBoolean(true);
+        FalseInstance = CreateBoolean(false);
+    }
+    public Box CreateBox() {
+        return new Box(this);
+    }
+    public Box CreateBox(IEnumerable<Box> Components) {
+        return new Box(this, CreateList(Components), default, null);
+    }
+    public Box CreateBox(BoxMethod Method) {
+        return new Box(this, CreateList(), Method, null);
+    }
+    public Box CreateBox(IEnumerable<Box> Components, BoxMethod Method) {
+        return new Box(this, CreateList(Components), Method, null);
+    }
+    public Box CreateNull() {
+        return new Box(this, CreateList(Null), default, null);
+    }
+    public Box CreateBoolean(bool BooleanData) {
+        return new Box(this, CreateList(Boolean), default, BooleanData);
+    }
+    public Box CreateInteger(long IntegerData) {
+        return new Box(this, CreateList(Integer), default, IntegerData);
+    }
+    public Box CreateReal(double RealData) {
+        return new Box(this, CreateList(Real), default, RealData);
+    }
+    public Box CreateString(byte[] StringData) {
+        return new Box(this, CreateList(String), default, StringData);
+    }
+    public Box CreateString(string StringData) {
+        return CreateString(Encoding.UTF8.GetBytes(StringData));
+    }
+    public Box CreateList(params IEnumerable<Box> ListData) {
+        return new Box(this, List, default, ListData);
+    }
+    public Box CreateDictionary(IReadOnlyDictionary<Box, Box> DictionaryData) {
+        return new Box(this, CreateList(Dictionary), default, DictionaryData);
+    }
     public Result<Box, string> Evaluate(Box Target, Expression Expression) {
         Stack<Box> Values = new();
-        Values.Push(Box.Null);
+        Values.Push(NullInstance);
 
         Stack<Frame> Frames = new();
         Frames.Push(new Frame(Target, Expression, 1));
@@ -519,7 +573,7 @@ public sealed class Actor {
         }
     }
 
-    private static Result<Success, string> EvaluateFrame(Stack<Box> Values, Stack<Frame> Frames, Frame CurrentFrame) {
+    private Result<Success, string> EvaluateFrame(Stack<Box> Values, Stack<Frame> Frames, Frame CurrentFrame) {
         switch (CurrentFrame.Expression) {
 
             case MultiExpression MultiExpression:
@@ -625,12 +679,32 @@ public sealed class Actor {
 
                         BoxMethod CallMethod = CallTarget.GetMethod();
 
-                        if (CallMethod.Expression is not null) {
-                            Box CallScope = Box.From(Box.FromList(CallTarget), CallMethod, null);
-                            foreach (string Parameter in CallScope.Method.Parameters) {
-                                CallScope.SetVariable(Parameter, CallArgument.GetVariable("get")); // TODO
+                        Box CallScope = new(this, CreateList(CallTarget), CallMethod, null);
+                        Values.Push(CallScope);
+                        if (CallScope.Method.Parameters is not null) {
+                            for (int Index = CallScope.Method.Parameters.Count - 1; Index >= 0; Index--) {
+                                Box? ArgumentGetter = CallArgument.GetVariable(Box.GetVariableName);
+                                if (ArgumentGetter is null) {
+                                    return Result<Success, string>.FromError($"Missing method `{Box.GetVariableName}`");
+                                }
+
+                                Result<Success, string> EvaluateCallResult = EvaluateCall(ArgumentGetter, [CreateInteger(Index)], Values, Frames, CurrentFrame);
+                                if (EvaluateCallResult.IsError) {
+                                    return EvaluateCallResult;
+                                }
                             }
-                            Frames.Push(new Frame(CallScope, CallScope.Method.Expression!, Values.Count));
+                        }
+                        break;
+                    case 3:
+                        Box[] Arguments = new Box[Values.Count - CurrentFrame.ValuesCount - 1];
+                        for (int Index = 0; Index < Arguments.Length; Index++) {
+                            Arguments[Index] = Values.Pop();
+                        }
+                        Box CallScope2 = Values.Pop();
+
+                        Result<Success, string> EvaluateCallResult2 = EvaluateCall(CallScope2, Arguments, Values, Frames, CurrentFrame);
+                        if (EvaluateCallResult2.IsError) {
+                            return EvaluateCallResult2;
                         }
                         break;
                     default:
@@ -642,7 +716,7 @@ public sealed class Actor {
             case BoxExpression BoxExpression:
                 switch (CurrentFrame.Counter) {
                     case 0:
-                        Box Box = new();
+                        Box Box = CreateBox();
                         Values.Push(Box);
                         if (BoxExpression.Expression is not null) {
                             Frames.Push(new Frame(Box, BoxExpression.Expression, Values.Count));
@@ -662,7 +736,7 @@ public sealed class Actor {
             case StringExpression StringExpression:
                 switch (CurrentFrame.Counter) {
                     case 0:
-                        Values.Push(Box.FromString(StringExpression.String));
+                        Values.Push(CreateString(StringExpression.String));
                         break;
                     default:
                         Frames.Pop();
@@ -673,7 +747,7 @@ public sealed class Actor {
             case IntegerExpression IntegerExpression:
                 switch (CurrentFrame.Counter) {
                     case 0:
-                        Values.Push(Box.FromInteger(IntegerExpression.Integer));
+                        Values.Push(CreateInteger(IntegerExpression.Integer));
                         break;
                     default:
                         Frames.Pop();
@@ -684,7 +758,7 @@ public sealed class Actor {
             case RealExpression RealExpression:
                 switch (CurrentFrame.Counter) {
                     case 0:
-                        Values.Push(Box.FromReal(RealExpression.Real));
+                        Values.Push(CreateReal(RealExpression.Real));
                         break;
                     default:
                         Frames.Pop();
@@ -711,6 +785,36 @@ public sealed class Actor {
 
         return Result<Success, string>.FromSuccess();
     }
+    private Result<Success, string> EvaluateCall(Box Box, scoped ReadOnlySpan<Box> Arguments, Stack<Box> Values, Stack<Frame> Frames, Frame CurrentFrame) {
+        Box CallScope = new(this, CreateList(Box), Box.GetMethod(), null);
+        Values.Push(CallScope);
+
+        if (Arguments.Length > (CallScope.Method.Parameters?.Count ?? 0)) {
+            return Result<Success, string>.FromError($"Too many arguments (expected {CallScope.Method.Parameters?.Count ?? 0}, got {Arguments.Length})");
+        }
+
+        if (CallScope.Method.Parameters is not null) {
+            for (int ParameterIndex = 0; ParameterIndex < CallScope.Method.Parameters.Count; ParameterIndex++) {
+                string Parameter = CallScope.Method.Parameters[ParameterIndex];
+
+                if (ParameterIndex >= Arguments.Length) {
+                    return Result<Success, string>.FromError($"Missing argument for parameter: `{Parameter}`");
+                }
+
+                CallScope.SetVariable(Parameter, Arguments[ParameterIndex]);
+            }
+        }
+
+        if (CallScope.Method.Expression is null) {
+            Values.Push(NullInstance);
+        }
+        else {
+            Frames.Push(new Frame(CallScope, CallScope.Method.Expression, Values.Count));
+        }
+
+        return Result<Success, string>.FromSuccess();
+    }
+
 
     private sealed class Frame {
         public Box Target { get; set; }
