@@ -209,9 +209,48 @@ public sealed class Parser {
                 if (BoxResult.IsError) {
                     return Result<Expression, string>.FromError(BoxResult.Error);
                 }
+                BoxExpression BoxExpression = BoxResult.Value;
 
                 // Add box expression
-                Expressions.Add(BoxResult.Value);
+                Expressions.Add(BoxExpression);
+            }
+            // Tuple
+            else if (Source[Index] is '(') {
+                // Consume tuple
+                Result<List<Expression>, string> TupleResult = ParseTuple();
+                if (TupleResult.IsError) {
+                    return Result<Expression, string>.FromError(TupleResult.Error);
+                }
+                List<Expression> Tuple = TupleResult.Value;
+
+                // Whitespace
+                ReadWhitespace();
+
+                // Box
+                if (Index < Source.Length && Source[Index] is '{') {
+                    // Consume box expression
+                    Result<BoxExpression, string> BoxResult = ParseBox();
+                    if (BoxResult.IsError) {
+                        return Result<Expression, string>.FromError(BoxResult.Error);
+                    }
+                    BoxExpression BoxExpression = BoxResult.Value;
+
+                    // Get parameters
+                    List<string> Parameters = new(Tuple.Count);
+                    foreach (Expression ParameterExpression in Tuple) {
+                        if (ParameterExpression is not GetExpression ParameterGetExpression) {
+                            return Result<Expression, string>.FromError($"Expected parameter, got `{ParameterExpression.GetType()}`");
+                        }
+                        if (ParameterGetExpression.Target is not null) {
+                            return Result<Expression, string>.FromError($"Expected parameter, got targeted {nameof(GetExpression)}");
+                        }
+                        Parameters.Add(ParameterGetExpression.Member);
+                    }
+
+                    // Set box expression method
+                    BoxExpression.Expression = null;
+                    BoxExpression.Method = new BoxMethod(Parameters, BoxExpression);
+                }
             }
 
             // Whitespace
@@ -244,13 +283,47 @@ public sealed class Parser {
             return Result<BoxExpression, string>.FromError(ExpressionsResult.Error);
         }
 
-        if (Source[Index] is not '}') {
+        if (Index >= Source.Length || Source[Index] is not '}') {
             return Result<BoxExpression, string>.FromError("Expected `}` to end box");
         }
         Index++;
 
-        BoxExpression BoxExpression = new(ExpressionsResult.Value);
+        BoxExpression BoxExpression = new(ExpressionsResult.Value, default);
         return Result<BoxExpression, string>.FromValue(BoxExpression);
+    }
+    private Result<List<Expression>, string> ParseTuple() {
+        if (Source[Index] is not '(') {
+            return Result<List<Expression>, string>.FromError("Expected `(` to start tuple");
+        }
+        Index++;
+
+        List<Expression> Expressions = [];
+
+        while (true) {
+            ReadWhitespace();
+
+            if (Index >= Source.Length || Source[Index] is ')') {
+                break;
+            }
+
+            Result<Expression, string> ExpressionResult = ParseExpression();
+            if (ExpressionResult.IsError) {
+                return Result<List<Expression>, string>.FromError(ExpressionResult.Error);
+            }
+
+            ReadWhitespace();
+
+            if (Index >= Source.Length || Source[Index] is not ',') {
+                break;
+            }
+        }
+
+        if (Index >= Source.Length || Source[Index] is not ')') {
+            return Result<List<Expression>, string>.FromError("Expected `)` to end tuple");
+        }
+        Index++;
+
+        return Result<List<Expression>, string>.FromValue(Expressions);
     }
     private void ReadWhitespace() {
         for (; Index < Source.Length; Index++) {
@@ -367,9 +440,11 @@ public class CallExpression : Expression {
 }
 public class BoxExpression : Expression {
     public Expression? Expression { get; set; }
+    public BoxMethod Method { get; set; }
 
-    public BoxExpression(Expression? Expression) {
+    public BoxExpression(Expression? Expression, BoxMethod Method) {
         this.Expression = Expression;
+        this.Method = Method;
     }
 }
 public class StringExpression : Expression {
@@ -716,7 +791,7 @@ public sealed class Actor {
             case BoxExpression BoxExpression:
                 switch (CurrentFrame.Counter) {
                     case 0:
-                        Box Box = CreateBox();
+                        Box Box = CreateBox(BoxExpression.Method);
                         Values.Push(Box);
                         if (BoxExpression.Expression is not null) {
                             Frames.Push(new Frame(Box, BoxExpression.Expression, Values.Count));

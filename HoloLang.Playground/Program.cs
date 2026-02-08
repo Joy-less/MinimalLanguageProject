@@ -6,7 +6,7 @@ Expression Expression = Parser.Parse("""
     "hello there";
     4.6;
 
-    {
+    () {
         a = 3;
     };
     """).Value;
